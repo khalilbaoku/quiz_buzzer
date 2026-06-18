@@ -1,0 +1,33 @@
+{
+  "name": "quiz-buzzer",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "party:dev": "npx partykit dev party/src/buzzer.ts --port 1999",
+    "party:deploy": "npx partykit deploy party/src/buzzer.ts"
+  },
+  "dependencies": {
+    "framer-motion": "^11.0.0",
+    "howler": "^2.2.4",
+    "next": "^14.2.0",
+    "partysocket": "^1.0.0",
+    "qrcode": "^1.5.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/howler": "^2.2.11",
+    "@types/node": "^20.11.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "autoprefixer": "^10.4.17",
+    "partykit": "^0.0.108",
+    "postcss": "^8.4.33",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.0"
+  }
+}

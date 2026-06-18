@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0a0a0a;
+  --fg: #ededed;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+* {
+  -webkit-touch-callout: none;
+}
+
+/* Prevent pull-to-refresh on mobile */
+html, body {
+  overflow: hidden;
+  height: 100%;
+  height: 100dvh;
+}
+
+#__next, main {
+  height: 100%;
+  height: 100dvh;
+}
