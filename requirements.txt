@@ -1,0 +1,20 @@
+# Quiz Buzzer local requirements
+#
+# This project is a Node.js/Next.js app, so dependencies are installed from
+# package.json/package-lock.json with npm rather than pip.
+
+Node.js >= 20
+npm >= 10
+
+Install dependencies:
+npm install
+
+Run locally on your laptop:
+npm run party:dev
+npm run dev -- --hostname 0.0.0.0
+
+Open on your laptop:
+http://localhost:3000
+
+Open on your phone while connected to the same Wi-Fi:
+http://<your-laptop-ip>:3000

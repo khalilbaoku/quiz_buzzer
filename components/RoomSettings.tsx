@@ -26,6 +26,26 @@ export default function RoomSettings({ config, onChange }: RoomSettingsProps) {
           {/* Answer Timer */}
           <div>
             <label className="text-sm text-zinc-400 block mb-1.5">
+              Points per question
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={config.pointsPerQuestion}
+                onChange={(e) =>
+                  onChange({ pointsPerQuestion: Number(e.target.value) })
+                }
+                className="w-24 py-2 px-3 bg-zinc-950 border border-zinc-700 rounded-lg
+                  text-sm text-white focus:outline-none focus:border-zinc-500"
+              />
+              <span className="text-zinc-500 text-sm">awarded for correct answers</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm text-zinc-400 block mb-1.5">
               Answer timer (seconds)
             </label>
             <div className="flex items-center gap-3">

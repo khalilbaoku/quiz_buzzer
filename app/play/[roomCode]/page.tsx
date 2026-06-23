@@ -3,8 +3,11 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import PartySocket from "partysocket";
+import { AnimatePresence, motion } from "framer-motion";
 import BuzzButton from "@/components/BuzzButton";
+import BuzzQueue from "@/components/BuzzQueue";
 import Timer from "@/components/Timer";
+import { connectToRoom } from "@/lib/party-client";
 import { playBuzz, playCorrect, playIncorrect, playOpen, unlockAudio } from "@/lib/sounds";
 import type { RoomState, ServerMessage, BuzzEntry } from "@/lib/types";
 
@@ -22,13 +25,18 @@ export default function PlayPage() {
   const [myTeamName, setMyTeamName] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [resultBanner, setResultBanner] = useState<{
+    kind: "correct" | "incorrect" | "expired";
+    teamId: string | null;
+  } | null>(null);
   const wsRef = useRef<PartySocket | null>(null);
+  const bannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentBuzzerRef = useRef<string | null>(null);
 
   useEffect(() => {
     unlockAudio();
 
-    const host = process.env.NEXT_PUBLIC_PARTYKIT_HOST || "localhost:1999";
-    const ws = new PartySocket({ host, room: roomCode });
+    const ws = connectToRoom(roomCode);
     wsRef.current = ws;
 
     ws.addEventListener("open", () => {
@@ -48,6 +56,7 @@ export default function PlayPage() {
       switch (msg.type) {
         case "state":
           setState(msg.state);
+          currentBuzzerRef.current = msg.state.currentBuzzer;
           break;
         case "joined": {
           const joined = msg as unknown as {
@@ -71,11 +80,22 @@ export default function PlayPage() {
           playOpen();
           break;
         case "correct":
+          if (bannerTimeoutRef.current) clearTimeout(bannerTimeoutRef.current);
+          setResultBanner({ kind: "correct", teamId: msg.teamId });
           playCorrect();
+          bannerTimeoutRef.current = setTimeout(() => setResultBanner(null), 1800);
           break;
         case "incorrect":
-        case "timer:expired":
+          if (bannerTimeoutRef.current) clearTimeout(bannerTimeoutRef.current);
+          setResultBanner({ kind: "incorrect", teamId: msg.teamId });
           playIncorrect();
+          bannerTimeoutRef.current = setTimeout(() => setResultBanner(null), 1800);
+          break;
+        case "timer:expired":
+          if (bannerTimeoutRef.current) clearTimeout(bannerTimeoutRef.current);
+          setResultBanner({ kind: "expired", teamId: currentBuzzerRef.current });
+          playIncorrect();
+          bannerTimeoutRef.current = setTimeout(() => setResultBanner(null), 1800);
           break;
         case "error":
           setError((msg as { message: string }).message);
@@ -90,6 +110,7 @@ export default function PlayPage() {
     }
 
     return () => {
+      if (bannerTimeoutRef.current) clearTimeout(bannerTimeoutRef.current);
       ws.close();
     };
   }, [roomCode, teamCode, playerName]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -133,11 +154,24 @@ export default function PlayPage() {
   const myBuzzPosition = myBuzz?.position ?? null;
   const currentBuzzerIsMe = state.currentBuzzer === myTeamId;
   const teamColor = myTeamColor || myTeam?.color || "#ffffff";
+  const bannerTeam = resultBanner?.teamId
+    ? state.teams.find((team) => team.id === resultBanner.teamId)
+    : null;
+  const statusText =
+    state.phase === "open"
+      ? "Buzzers open"
+      : state.phase === "buzzed"
+        ? currentBuzzerIsMe
+          ? "Your turn"
+          : "Waiting for answer"
+        : state.phase === "expired"
+          ? "Time ran out"
+          : "Waiting to buzz";
 
   return (
     <div
-      className="flex-1 flex flex-col overflow-hidden"
-      style={{ height: "100dvh" }}
+      className="flex-1 flex flex-col overflow-auto"
+      style={{ minHeight: "100dvh" }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800/50">
@@ -184,6 +218,82 @@ export default function PlayPage() {
         currentBuzzerIsMe={currentBuzzerIsMe}
         teamColor={teamColor}
       />
+
+      <AnimatePresence>
+        {resultBanner && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.92, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 8 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 z-40 flex items-center justify-center pointer-events-none px-6"
+          >
+            <div className="rounded-2xl border border-zinc-700 bg-zinc-950/95 px-6 py-5 text-center shadow-2xl shadow-black/40">
+              <div
+                className={`text-4xl sm:text-5xl font-black tracking-[0.2em] ${
+                  resultBanner.kind === "correct"
+                    ? "text-green-400"
+                    : resultBanner.kind === "incorrect"
+                      ? "text-red-400"
+                      : "text-red-300"
+                }`}
+              >
+                {resultBanner.kind === "correct"
+                  ? "CORRECT"
+                  : resultBanner.kind === "incorrect"
+                    ? "INCORRECT"
+                    : "TIME UP"}
+              </div>
+              <div className="mt-3 text-sm text-zinc-400">
+                {bannerTeam ? bannerTeam.name : "Your team"}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="px-4 pb-3">
+        <div
+          className={`flex items-center justify-between rounded-xl border px-3 py-2 ${
+            state.phase === "open"
+              ? "border-green-500/30 bg-green-500/10"
+              : state.phase === "buzzed"
+                ? "border-yellow-500/30 bg-yellow-500/10"
+                : "border-zinc-700 bg-zinc-900/60"
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${
+                state.phase === "open"
+                  ? "bg-green-400"
+                  : state.phase === "buzzed"
+                    ? "bg-yellow-400"
+                    : "bg-zinc-500"
+              }`}
+            />
+            <span className="text-sm font-bold tracking-[0.14em] uppercase text-zinc-100 truncate">
+              {statusText}
+            </span>
+          </div>
+          <span className="text-xs text-zinc-500 uppercase tracking-[0.18em]">
+            Q{state.questionNumber}
+          </span>
+        </div>
+      </div>
+
+      {state.buzzQueue.length > 0 && (
+        <div className="px-4 pb-4">
+          <h2 className="text-xs text-zinc-500 uppercase tracking-wider mb-2">
+            Buzz Order
+          </h2>
+          <BuzzQueue
+            queue={state.buzzQueue}
+            currentBuzzer={state.currentBuzzer}
+            compact
+          />
+        </div>
+      )}
 
       {/* Question number */}
       <div className="text-center pb-4">

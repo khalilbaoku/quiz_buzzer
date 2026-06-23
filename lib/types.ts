@@ -2,6 +2,7 @@
 
 export interface RoomConfig {
   answerTimerSeconds: number;
+  pointsPerQuestion: number;
   secondChanceMode: "queue" | "reset";
   buzzLockout: boolean;
   trackPoints: boolean;
@@ -9,6 +10,7 @@ export interface RoomConfig {
 
 export const DEFAULT_CONFIG: RoomConfig = {
   answerTimerSeconds: 15,
+  pointsPerQuestion: 10,
   secondChanceMode: "queue",
   buzzLockout: true,
   trackPoints: true,
@@ -47,7 +49,18 @@ export interface BuzzEntry {
 
 // ---- Room Phase ----
 
-export type RoomPhase = "lobby" | "ready" | "open" | "buzzed" | "answering";
+export type RoomPhase = "lobby" | "ready" | "open" | "buzzed" | "expired" | "answering";
+
+// ---- Question Result ----
+
+export interface QuestionResult {
+  questionNumber: number;
+  buzzQueue: BuzzEntry[];
+  winnerTeamId: string | null;
+  winnerPlayerId: string | null;
+  points: number;
+  corrected: boolean;
+}
 
 // ---- Serialized Room State (sent to clients) ----
 
@@ -62,6 +75,7 @@ export interface RoomState {
   currentBuzzerPlayer: string | null;
   answerTimerEnd: number | null;
   questionNumber: number;
+  questionHistory: QuestionResult[];
   hostConnected: boolean;
 }
 
@@ -80,6 +94,7 @@ export type ClientMessage =
   | { type: "host:reset-buzzers" }
   | { type: "host:update-config"; config: Partial<RoomConfig> }
   | { type: "host:award-points"; teamId: string; points: number }
+  | { type: "host:reassign-question"; questionNumber: number; teamId: string | null; points?: number }
   | { type: "host:new-question" };
 
 // ---- Server -> Client Messages ----

@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import PartySocket from "partysocket";
 import BuzzQueue from "@/components/BuzzQueue";
 import ScoreBoard from "@/components/ScoreBoard";
 import Timer from "@/components/Timer";
 import RoomSettings from "@/components/RoomSettings";
+import { connectToRoom } from "@/lib/party-client";
 import { playBuzz, playCorrect, playIncorrect, playOpen, unlockAudio } from "@/lib/sounds";
 import type { RoomState, ServerMessage, RoomConfig } from "@/lib/types";
 
@@ -14,6 +15,7 @@ const DEFAULT_TEAM_NAMES = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtr
 
 export default function HostPage() {
   const params = useParams();
+  const router = useRouter();
   const roomCode = (params.roomCode as string).toUpperCase();
 
   const [state, setState] = useState<RoomState | null>(null);
@@ -33,8 +35,7 @@ export default function HostPage() {
   useEffect(() => {
     unlockAudio();
 
-    const host = process.env.NEXT_PUBLIC_PARTYKIT_HOST || "localhost:1999";
-    const ws = new PartySocket({ host, room: roomCode });
+    const ws = connectToRoom(roomCode);
     wsRef.current = ws;
 
     ws.addEventListener("open", () => {
@@ -49,7 +50,14 @@ export default function HostPage() {
 
       switch (msg.type) {
         case "state":
-          setState(msg.state);
+          setState({
+            ...msg.state,
+            questionHistory: msg.state.questionHistory ?? [],
+            config: {
+              ...msg.state.config,
+              pointsPerQuestion: msg.state.config.pointsPerQuestion ?? 10,
+            },
+          });
           if (msg.state.teams.length > 0) {
             setSetupMode(false);
           }
@@ -88,7 +96,12 @@ export default function HostPage() {
 
   const send = useCallback(
     (msg: Record<string, unknown>) => {
-      wsRef.current?.send(JSON.stringify(msg));
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        setConnected(false);
+        return;
+      }
+      ws.send(JSON.stringify(msg));
     },
     []
   );
@@ -176,6 +189,13 @@ export default function HostPage() {
           >
             CREATE TEAMS
           </button>
+
+          <button
+            onClick={() => router.push("/")}
+            className="w-full py-2 text-zinc-500 text-sm hover:text-zinc-300 transition-colors"
+          >
+            Back
+          </button>
         </div>
       </div>
     );
@@ -199,7 +219,12 @@ export default function HostPage() {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-black tracking-tight">BUZZ</h1>
+          <button
+            onClick={() => router.push("/")}
+            className="text-xl font-black tracking-tight hover:text-zinc-300 transition-colors"
+          >
+            BUZZ
+          </button>
           <span className="text-zinc-500 text-sm">HOST</span>
         </div>
         <div className="flex items-center gap-3">
@@ -293,7 +318,7 @@ export default function HostPage() {
                 className={`w-3 h-3 rounded-full ${
                   state.phase === "open"
                     ? "bg-green-500 animate-pulse"
-                    : state.phase === "buzzed"
+                    : state.phase === "buzzed" || state.phase === "expired"
                     ? "bg-yellow-500"
                     : "bg-zinc-600"
                 }`}
@@ -301,9 +326,11 @@ export default function HostPage() {
               <span className="text-sm font-medium text-zinc-400 uppercase">
                 {state.phase === "open"
                   ? "Buzzers Open"
-                  : state.phase === "buzzed"
+                  : state.phase === "buzzed" || state.phase === "expired"
                   ? currentBuzzEntry
-                    ? `${currentBuzzEntry.playerName} (${currentBuzzEntry.teamName}) answering`
+                    ? state.phase === "expired"
+                      ? `Time expired for ${currentBuzzEntry.playerName} (${currentBuzzEntry.teamName})`
+                      : `${currentBuzzEntry.playerName} (${currentBuzzEntry.teamName}) answering`
                     : "Answering..."
                   : state.phase === "lobby"
                   ? "Waiting for teams"
@@ -354,7 +381,12 @@ export default function HostPage() {
             {state.currentBuzzer && (
               <div className="flex gap-2">
                 <button
-                  onClick={() => send({ type: "host:correct", points: 10 })}
+                  onClick={() =>
+                    send({
+                      type: "host:correct",
+                      points: state.config.pointsPerQuestion,
+                    })
+                  }
                   className="flex-1 py-3 px-4 bg-green-600/20 text-green-400 font-bold rounded-xl
                     border border-green-600/30 hover:bg-green-600/30 active:scale-[0.98] transition-all"
                 >
@@ -365,7 +397,7 @@ export default function HostPage() {
                   className="flex-1 py-3 px-4 bg-red-600/20 text-red-400 font-bold rounded-xl
                     border border-red-600/30 hover:bg-red-600/30 active:scale-[0.98] transition-all"
                 >
-                  WRONG
+                  INCORRECT
                 </button>
               </div>
             )}
@@ -381,8 +413,125 @@ export default function HostPage() {
               config={state.config}
               onChange={(updates) => send({ type: "host:update-config", config: updates })}
             />
+
+            <QuestionHistoryEditor
+              state={state}
+              onReassign={(questionNumber, teamId, points) =>
+                send({
+                  type: "host:reassign-question",
+                  questionNumber,
+                  teamId,
+                  points,
+                })
+              }
+            />
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function QuestionHistoryEditor({
+  state,
+  onReassign,
+}: {
+  state: RoomState;
+  onReassign: (questionNumber: number, teamId: string | null, points: number) => void;
+}) {
+  const questionHistory = state.questionHistory ?? [];
+
+  if (!state.config.trackPoints || questionHistory.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="pt-2">
+      <h2 className="text-xs text-zinc-500 uppercase tracking-wider mb-2">
+        Score Corrections
+      </h2>
+      <div className="space-y-2">
+        {[...questionHistory].reverse().map((result) => (
+          <QuestionCorrectionRow
+            key={result.questionNumber}
+            result={result}
+            teams={state.teams}
+            defaultPoints={state.config.pointsPerQuestion}
+            onReassign={onReassign}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function QuestionCorrectionRow({
+  result,
+  teams,
+  defaultPoints,
+  onReassign,
+}: {
+  result: RoomState["questionHistory"][number];
+  teams: RoomState["teams"];
+  defaultPoints: number;
+  onReassign: (questionNumber: number, teamId: string | null, points: number) => void;
+}) {
+  const [teamId, setTeamId] = useState(result.winnerTeamId ?? "");
+  const [points, setPoints] = useState(result.points || defaultPoints);
+
+  useEffect(() => {
+    setTeamId(result.winnerTeamId ?? "");
+    setPoints(result.points || defaultPoints);
+  }, [defaultPoints, result.points, result.winnerTeamId]);
+
+  const winner = teams.find((team) => team.id === result.winnerTeamId);
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-white text-sm font-bold">Q{result.questionNumber}</div>
+          <div className="text-zinc-500 text-xs">
+            {winner ? `${winner.name} +${result.points}` : "No points awarded"}
+            {result.corrected ? " · corrected" : ""}
+          </div>
+        </div>
+        <div className="text-zinc-600 text-xs">
+          {result.buzzQueue.length} buzz{result.buzzQueue.length === 1 ? "" : "es"}
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-2">
+        <select
+          value={teamId}
+          onChange={(event) => setTeamId(event.target.value)}
+          className="flex-1 py-2 px-2 bg-zinc-950 border border-zinc-700 rounded-lg
+            text-sm text-white focus:outline-none focus:border-zinc-500"
+        >
+          <option value="">No points</option>
+          {teams.map((team) => (
+            <option key={team.id} value={team.id}>
+              {team.name}
+            </option>
+          ))}
+        </select>
+        <input
+          type="number"
+          min={0}
+          value={points}
+          onChange={(event) => setPoints(Number(event.target.value))}
+          className="w-full sm:w-24 py-2 px-2 bg-zinc-950 border border-zinc-700 rounded-lg
+            text-sm text-white focus:outline-none focus:border-zinc-500"
+        />
+        <button
+          onClick={() =>
+            onReassign(result.questionNumber, teamId || null, Number(points) || 0)
+          }
+          className="py-2 px-3 bg-zinc-800 text-zinc-300 font-bold rounded-lg text-sm
+            hover:bg-zinc-700 transition-colors"
+        >
+          Update
+        </button>
       </div>
     </div>
   );

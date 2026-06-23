@@ -108,33 +108,49 @@ export default function BuzzButton({
               </>
             )}
           </motion.div>
-        ) : phase === "buzzed" ? (
+        ) : phase === "buzzed" || phase === "expired" ? (
           <motion.div
             key="locked"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             className="text-center"
           >
-            <div className="text-4xl mb-4 opacity-30">🔒</div>
-            <p className="text-zinc-500 text-lg">Buzzers locked</p>
+            <div
+              className="w-48 h-48 sm:w-64 sm:h-64 rounded-full flex items-center justify-center
+                border-2 border-zinc-800 bg-zinc-900/40"
+            >
+              <span className="text-2xl sm:text-3xl text-zinc-300 font-black tracking-[0.2em]">
+                WAITING
+              </span>
+            </div>
+            <p className="text-zinc-400 text-lg mt-4 font-medium">Waiting to buzz</p>
+            <p className="text-zinc-600 text-sm mt-1">
+              {phase === "expired" ? "Answer time ran out" : "Buzzers are locked for now"}
+            </p>
           </motion.div>
         ) : (
           <motion.div
             key="waiting"
             initial={{ opacity: 0 }}
-            animate={{ opacity: 0.5 }}
+            animate={{ opacity: 1 }}
             className="text-center"
           >
             <div
               className="w-48 h-48 sm:w-64 sm:h-64 rounded-full flex items-center justify-center
-                border-2 border-zinc-800"
+                border-2 border-zinc-700 bg-zinc-900/50"
             >
-              <span className="text-2xl text-zinc-600 font-bold">WAIT</span>
+              <span className="text-xl sm:text-2xl text-zinc-200 font-black tracking-[0.22em] text-center">
+                WAITING<br />
+                TO BUZZ
+              </span>
             </div>
-            <p className="text-zinc-600 text-sm mt-4">
+            <p className="text-zinc-400 text-lg mt-4 font-medium">
+              Waiting to buzz
+            </p>
+            <p className="text-zinc-600 text-sm mt-1">
               {phase === "lobby"
                 ? "Waiting for host..."
-                : "Waiting for next question..."}
+                : "The next question is live"}
             </p>
           </motion.div>
         )}

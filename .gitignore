@@ -1,1 +1,6 @@
 node_modules
+.next
+.partykit
+out
+dist
+.env*.local

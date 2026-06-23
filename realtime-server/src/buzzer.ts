@@ -4,6 +4,7 @@ import type * as Party from "partykit/server";
 
 interface RoomConfig {
   answerTimerSeconds: number;
+  pointsPerQuestion: number;
   secondChanceMode: "queue" | "reset";
   buzzLockout: boolean;
   trackPoints: boolean;
@@ -34,7 +35,16 @@ interface BuzzEntry {
   position: number;
 }
 
-type RoomPhase = "lobby" | "ready" | "open" | "buzzed" | "answering";
+type RoomPhase = "lobby" | "ready" | "open" | "buzzed" | "expired" | "answering";
+
+interface QuestionResult {
+  questionNumber: number;
+  buzzQueue: BuzzEntry[];
+  winnerTeamId: string | null;
+  winnerPlayerId: string | null;
+  points: number;
+  corrected: boolean;
+}
 
 interface RoomState {
   roomCode: string;
@@ -47,6 +57,7 @@ interface RoomState {
   currentBuzzerPlayer: string | null;
   answerTimerEnd: number | null;
   questionNumber: number;
+  questionHistory: QuestionResult[];
   hostConnected: boolean;
 }
 
@@ -61,10 +72,13 @@ const TEAM_CODES = [
 
 const DEFAULT_CONFIG: RoomConfig = {
   answerTimerSeconds: 15,
+  pointsPerQuestion: 10,
   secondChanceMode: "queue",
   buzzLockout: true,
   trackPoints: true,
 };
+
+const BUZZ_COLLECTION_WINDOW_MS = 1000;
 
 export default class BuzzerServer implements Party.Server {
   config: RoomConfig = { ...DEFAULT_CONFIG };
@@ -76,12 +90,18 @@ export default class BuzzerServer implements Party.Server {
   currentBuzzerPlayer: string | null = null;
   answerTimerEnd: number | null = null;
   questionNumber: number = 1;
+  questionHistory: QuestionResult[] = [];
   hostConnectionId: string | null = null;
   connectionToPlayer: Map<string, string> = new Map(); // connectionId -> playerId
   timerTimeout: ReturnType<typeof setTimeout> | null = null;
   firstBuzzTime: number | null = null;
+  acceptingBuzzesUntil: number | null = null;
 
   constructor(readonly room: Party.Room) {}
+
+  isHost(sender: Party.Connection) {
+    return sender.id === this.hostConnectionId || !this.connectionToPlayer.has(sender.id);
+  }
 
   getState(): RoomState {
     return {
@@ -95,6 +115,7 @@ export default class BuzzerServer implements Party.Server {
       currentBuzzerPlayer: this.currentBuzzerPlayer,
       answerTimerEnd: this.answerTimerEnd,
       questionNumber: this.questionNumber,
+      questionHistory: this.questionHistory,
       hostConnected: this.hostConnectionId !== null,
     };
   }
@@ -109,6 +130,45 @@ export default class BuzzerServer implements Party.Server {
 
   broadcastState() {
     this.broadcast({ type: "state", state: this.getState() });
+  }
+
+  recalculateScores() {
+    for (const team of this.teams.values()) {
+      team.score = 0;
+    }
+
+    if (!this.config.trackPoints) return;
+
+    for (const result of this.questionHistory) {
+      if (!result.winnerTeamId) continue;
+      const team = this.teams.get(result.winnerTeamId);
+      if (team) {
+        team.score += result.points;
+      }
+    }
+  }
+
+  recordQuestionResult(winnerTeamId: string | null, winnerPlayerId: string | null, points: number) {
+    const existingIndex = this.questionHistory.findIndex(
+      (result) => result.questionNumber === this.questionNumber
+    );
+    const existing = this.questionHistory[existingIndex];
+    const result: QuestionResult = {
+      questionNumber: this.questionNumber,
+      buzzQueue: this.buzzQueue.map((entry) => ({ ...entry })),
+      winnerTeamId,
+      winnerPlayerId,
+      points,
+      corrected: existing ? true : false,
+    };
+
+    if (existingIndex >= 0) {
+      this.questionHistory[existingIndex] = result;
+    } else {
+      this.questionHistory.push(result);
+    }
+
+    this.recalculateScores();
   }
 
   onConnect(connection: Party.Connection) {
@@ -163,7 +223,7 @@ export default class BuzzerServer implements Party.Server {
         this.handleLockBuzzer(sender);
         break;
       case "host:correct":
-        this.handleCorrect(sender, (msg.points as number) ?? 10);
+        this.handleCorrect(sender, msg.points as number | undefined);
         break;
       case "host:incorrect":
         this.handleIncorrect(sender);
@@ -180,6 +240,14 @@ export default class BuzzerServer implements Party.Server {
       case "host:award-points":
         this.handleAwardPoints(sender, msg.teamId as string, msg.points as number);
         break;
+      case "host:reassign-question":
+        this.handleReassignQuestion(
+          sender,
+          msg.questionNumber as number,
+          msg.teamId as string | null,
+          msg.points as number | undefined
+        );
+        break;
     }
   }
 
@@ -189,9 +257,14 @@ export default class BuzzerServer implements Party.Server {
   }
 
   handleSetupTeams(sender: Party.Connection, teamNames: string[]) {
-    if (sender.id !== this.hostConnectionId) return;
+    if (!this.isHost(sender)) return;
+    this.hostConnectionId = sender.id;
 
     this.teams.clear();
+    this.players.clear();
+    this.connectionToPlayer.clear();
+    this.questionHistory = [];
+    this.questionNumber = 1;
 
     for (let i = 0; i < teamNames.length; i++) {
       const name = teamNames[i]?.trim();
@@ -297,6 +370,11 @@ export default class BuzzerServer implements Party.Server {
 
   handleSharedJoin(sender: Party.Connection, teamNames: string[]) {
     // For shared mode, host creates teams inline
+    if (this.teams.size === 0) {
+      this.questionHistory = [];
+      this.questionNumber = 1;
+    }
+
     for (let i = 0; i < teamNames.length; i++) {
       const name = teamNames[i]?.trim();
       if (!name) continue;
@@ -332,7 +410,13 @@ export default class BuzzerServer implements Party.Server {
   }
 
   handleBuzz(sender: Party.Connection, teamIdOverride?: string) {
-    if (this.phase !== "open") return;
+    const now = Date.now();
+    const isCollectingFollowUpBuzzes =
+      this.acceptingBuzzesUntil !== null &&
+      now <= this.acceptingBuzzesUntil &&
+      this.config.secondChanceMode === "queue";
+
+    if (this.phase !== "open" && !isCollectingFollowUpBuzzes) return;
 
     // Determine who buzzed
     let teamId: string | undefined;
@@ -363,9 +447,9 @@ export default class BuzzerServer implements Party.Server {
     // Already buzzed by this team?
     if (this.buzzQueue.some((b) => b.teamId === teamId)) return;
 
-    const now = Date.now();
     if (this.firstBuzzTime === null) {
       this.firstBuzzTime = now;
+      this.acceptingBuzzesUntil = now + BUZZ_COLLECTION_WINDOW_MS;
     }
 
     const entry: BuzzEntry = {
@@ -403,12 +487,16 @@ export default class BuzzerServer implements Party.Server {
 
   handleTimerExpiry() {
     if (this.phase !== "buzzed") return;
+    this.phase = "expired";
+    this.answerTimerEnd = null;
+    this.timerTimeout = null;
     this.broadcast({ type: "timer:expired" });
-    this.processIncorrect();
+    this.broadcastState();
   }
 
   handleOpenBuzzer(sender: Party.Connection) {
-    if (sender.id !== this.hostConnectionId) return;
+    if (!this.isHost(sender)) return;
+    this.hostConnectionId = sender.id;
 
     this.phase = "open";
     this.buzzQueue = [];
@@ -416,6 +504,7 @@ export default class BuzzerServer implements Party.Server {
     this.currentBuzzerPlayer = null;
     this.answerTimerEnd = null;
     this.firstBuzzTime = null;
+    this.acceptingBuzzesUntil = null;
 
     if (this.timerTimeout) {
       clearTimeout(this.timerTimeout);
@@ -427,9 +516,11 @@ export default class BuzzerServer implements Party.Server {
   }
 
   handleLockBuzzer(sender: Party.Connection) {
-    if (sender.id !== this.hostConnectionId) return;
+    if (!this.isHost(sender)) return;
+    this.hostConnectionId = sender.id;
 
     this.phase = "ready";
+    this.acceptingBuzzesUntil = null;
     if (this.timerTimeout) {
       clearTimeout(this.timerTimeout);
       this.timerTimeout = null;
@@ -439,31 +530,34 @@ export default class BuzzerServer implements Party.Server {
     this.broadcastState();
   }
 
-  handleCorrect(sender: Party.Connection, points: number) {
-    if (sender.id !== this.hostConnectionId) return;
+  handleCorrect(sender: Party.Connection, points?: number) {
+    if (!this.isHost(sender)) return;
+    this.hostConnectionId = sender.id;
     if (!this.currentBuzzer) return;
 
-    const team = this.teams.get(this.currentBuzzer);
-    if (team && this.config.trackPoints) {
-      team.score += points;
-    }
+    const awardedPoints = Number.isFinite(points)
+      ? points!
+      : this.config.pointsPerQuestion;
+    this.recordQuestionResult(this.currentBuzzer, this.currentBuzzerPlayer, awardedPoints);
 
     if (this.timerTimeout) {
       clearTimeout(this.timerTimeout);
       this.timerTimeout = null;
     }
 
-    this.broadcast({ type: "correct", teamId: this.currentBuzzer, points });
+    this.broadcast({ type: "correct", teamId: this.currentBuzzer, points: awardedPoints });
 
     this.phase = "ready";
     this.currentBuzzer = null;
     this.currentBuzzerPlayer = null;
     this.answerTimerEnd = null;
+    this.acceptingBuzzesUntil = null;
     this.broadcastState();
   }
 
   handleIncorrect(sender: Party.Connection) {
-    if (sender.id !== this.hostConnectionId) return;
+    if (!this.isHost(sender)) return;
+    this.hostConnectionId = sender.id;
 
     if (this.timerTimeout) {
       clearTimeout(this.timerTimeout);
@@ -488,6 +582,7 @@ export default class BuzzerServer implements Party.Server {
         this.currentBuzzer = nextBuzz.teamId;
         this.currentBuzzerPlayer = nextBuzz.playerId;
         this.phase = "buzzed";
+        this.answerTimerEnd = null;
 
         if (this.config.answerTimerSeconds > 0) {
           this.answerTimerEnd = Date.now() + this.config.answerTimerSeconds * 1000;
@@ -498,6 +593,7 @@ export default class BuzzerServer implements Party.Server {
           }, this.config.answerTimerSeconds * 1000);
         }
       } else {
+        this.recordQuestionResult(null, null, 0);
         this.phase = "ready";
         this.currentBuzzer = null;
         this.currentBuzzerPlayer = null;
@@ -510,6 +606,7 @@ export default class BuzzerServer implements Party.Server {
       this.currentBuzzerPlayer = null;
       this.answerTimerEnd = null;
       this.firstBuzzTime = null;
+      this.acceptingBuzzesUntil = null;
       this.broadcast({ type: "buzz:opened" });
     }
 
@@ -517,7 +614,8 @@ export default class BuzzerServer implements Party.Server {
   }
 
   handleReset(sender: Party.Connection) {
-    if (sender.id !== this.hostConnectionId) return;
+    if (!this.isHost(sender)) return;
+    this.hostConnectionId = sender.id;
 
     this.phase = "ready";
     this.buzzQueue = [];
@@ -525,6 +623,7 @@ export default class BuzzerServer implements Party.Server {
     this.currentBuzzerPlayer = null;
     this.answerTimerEnd = null;
     this.firstBuzzTime = null;
+    this.acceptingBuzzesUntil = null;
 
     if (this.timerTimeout) {
       clearTimeout(this.timerTimeout);
@@ -535,7 +634,8 @@ export default class BuzzerServer implements Party.Server {
   }
 
   handleNewQuestion(sender: Party.Connection) {
-    if (sender.id !== this.hostConnectionId) return;
+    if (!this.isHost(sender)) return;
+    this.hostConnectionId = sender.id;
 
     this.questionNumber++;
     this.buzzQueue = [];
@@ -543,6 +643,7 @@ export default class BuzzerServer implements Party.Server {
     this.currentBuzzerPlayer = null;
     this.answerTimerEnd = null;
     this.firstBuzzTime = null;
+    this.acceptingBuzzesUntil = null;
     this.phase = "ready";
 
     if (this.timerTimeout) {
@@ -554,18 +655,73 @@ export default class BuzzerServer implements Party.Server {
   }
 
   handleUpdateConfig(sender: Party.Connection, updates: Partial<RoomConfig>) {
-    if (sender.id !== this.hostConnectionId) return;
-    this.config = { ...this.config, ...updates };
+    if (!this.isHost(sender)) return;
+    this.hostConnectionId = sender.id;
+    this.config = {
+      ...this.config,
+      ...updates,
+      pointsPerQuestion: Math.max(
+        0,
+        Number(updates.pointsPerQuestion ?? this.config.pointsPerQuestion)
+      ),
+    };
+    this.recalculateScores();
     this.broadcastState();
   }
 
   handleAwardPoints(sender: Party.Connection, teamId: string, points: number) {
-    if (sender.id !== this.hostConnectionId) return;
+    if (!this.isHost(sender)) return;
+    this.hostConnectionId = sender.id;
     const team = this.teams.get(teamId);
     if (team) {
       team.score += points;
       this.broadcastState();
     }
+  }
+
+  handleReassignQuestion(
+    sender: Party.Connection,
+    questionNumber: number,
+    teamId: string | null,
+    points?: number
+  ) {
+    if (!this.isHost(sender)) return;
+    this.hostConnectionId = sender.id;
+    if (!Number.isInteger(questionNumber) || questionNumber < 1) return;
+    if (teamId !== null && !this.teams.has(teamId)) return;
+
+    const existing = this.questionHistory.find(
+      (result) => result.questionNumber === questionNumber
+    );
+    const winnerPlayerId =
+      teamId === null
+        ? null
+        : existing?.buzzQueue.find((entry) => entry.teamId === teamId)?.playerId ?? null;
+    const nextPoints = Math.max(
+      0,
+      Number(points ?? existing?.points ?? this.config.pointsPerQuestion)
+    );
+    const nextResult: QuestionResult = {
+      questionNumber,
+      buzzQueue: existing?.buzzQueue ?? [],
+      winnerTeamId: teamId,
+      winnerPlayerId,
+      points: teamId === null ? 0 : nextPoints,
+      corrected: true,
+    };
+    const existingIndex = this.questionHistory.findIndex(
+      (result) => result.questionNumber === questionNumber
+    );
+
+    if (existingIndex >= 0) {
+      this.questionHistory[existingIndex] = nextResult;
+    } else {
+      this.questionHistory.push(nextResult);
+      this.questionHistory.sort((a, b) => a.questionNumber - b.questionNumber);
+    }
+
+    this.recalculateScores();
+    this.broadcastState();
   }
 }
 

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import PartySocket from "partysocket";
 import Timer from "@/components/Timer";
+import { connectToRoom } from "@/lib/party-client";
 import { playBuzz, playCorrect, playIncorrect, playOpen, unlockAudio } from "@/lib/sounds";
 import { buzzHaptic } from "@/lib/haptics";
 import type { RoomState, ServerMessage, Team } from "@/lib/types";
@@ -15,6 +16,7 @@ const PRESET_TEAMS = [
 
 export default function SharedPage() {
   const params = useParams();
+  const router = useRouter();
   const roomCode = (params.roomCode as string).toUpperCase();
 
   const [state, setState] = useState<RoomState | null>(null);
@@ -27,8 +29,7 @@ export default function SharedPage() {
   useEffect(() => {
     unlockAudio();
 
-    const host = process.env.NEXT_PUBLIC_PARTYKIT_HOST || "localhost:1999";
-    const ws = new PartySocket({ host, room: roomCode });
+    const ws = connectToRoom(roomCode);
     wsRef.current = ws;
 
     ws.addEventListener("open", () => {
@@ -82,8 +83,7 @@ export default function SharedPage() {
       <div className="flex-1 flex flex-col items-center justify-center p-6 gap-6">
         <h1 className="text-3xl font-black">SHARED MODE</h1>
         <p className="text-zinc-500 text-sm text-center">
-          All teams play on this one screen.<br />
-          Room: <span className="text-white font-bold">{roomCode}</span>
+          All teams play on this one screen.
         </p>
 
         <div className="w-full max-w-sm space-y-4">
@@ -138,6 +138,13 @@ export default function SharedPage() {
           >
             START
           </button>
+
+          <button
+            onClick={() => router.push("/")}
+            className="w-full py-2 text-zinc-500 text-sm hover:text-zinc-300 transition-colors"
+          >
+            Back
+          </button>
         </div>
       </div>
     );
@@ -159,7 +166,12 @@ export default function SharedPage() {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800/50">
         <div className="flex items-center gap-3">
-          <span className="font-black text-lg">BUZZ</span>
+          <button
+            onClick={() => router.push("/")}
+            className="font-black text-lg hover:text-zinc-300 transition-colors"
+          >
+            BUZZ
+          </button>
           <span className="text-zinc-600 text-xs">{roomCode}</span>
         </div>
         <div className="flex items-center gap-2">
@@ -216,13 +228,20 @@ export default function SharedPage() {
         {state.currentBuzzer && (
           <>
             <button
-              onClick={() => send({ type: "host:correct", points: 10 })}
+              onClick={() =>
+                send({
+                  type: "host:correct",
+                  points: state.config.pointsPerQuestion,
+                })
+              }
+              aria-label="Correct"
               className="flex-1 py-2 bg-green-900/50 text-green-400 font-bold rounded-lg text-sm border border-green-800"
             >
               ✓
             </button>
             <button
               onClick={() => send({ type: "host:incorrect" })}
+              aria-label="Incorrect"
               className="flex-1 py-2 bg-red-900/50 text-red-400 font-bold rounded-lg text-sm border border-red-800"
             >
               ✗

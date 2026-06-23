@@ -6,14 +6,13 @@ import type { BuzzEntry } from "@/lib/types";
 interface BuzzQueueProps {
   queue: BuzzEntry[];
   currentBuzzer: string | null;
+  compact?: boolean;
 }
 
-const MEDALS = ["🥇", "🥈", "🥉"];
-
-export default function BuzzQueue({ queue, currentBuzzer }: BuzzQueueProps) {
+export default function BuzzQueue({ queue, currentBuzzer, compact = false }: BuzzQueueProps) {
   if (queue.length === 0) {
     return (
-      <div className="text-zinc-600 text-center py-8 text-sm">
+      <div className={`text-zinc-600 text-center text-sm ${compact ? "py-3" : "py-8"}`}>
         No buzzes yet
       </div>
     );
@@ -30,14 +29,16 @@ export default function BuzzQueue({ queue, currentBuzzer }: BuzzQueueProps) {
               initial={{ opacity: 0, x: -20, height: 0 }}
               animate={{ opacity: 1, x: 0, height: "auto" }}
               transition={{ duration: 0.2, delay: i * 0.05 }}
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg ${
+              className={`flex items-center gap-3 rounded-lg ${
+                compact ? "px-3 py-2" : "px-4 py-3"
+              } ${
                 isCurrent
                   ? "bg-zinc-800 border border-zinc-600"
                   : "bg-zinc-900/50"
               }`}
             >
-              <span className="text-xl w-8 text-center">
-                {i < 3 ? MEDALS[i] : `#${entry.position}`}
+              <span className="text-sm w-8 text-center font-black text-zinc-300 tabular-nums">
+                #{entry.position}
               </span>
 
               <div
@@ -47,7 +48,7 @@ export default function BuzzQueue({ queue, currentBuzzer }: BuzzQueueProps) {
 
               <div className="flex-1 min-w-0">
                 <span
-                  className={`font-bold ${
+                  className={`${compact ? "text-sm" : ""} font-bold ${
                     isCurrent ? "text-white" : "text-zinc-400"
                   }`}
                 >

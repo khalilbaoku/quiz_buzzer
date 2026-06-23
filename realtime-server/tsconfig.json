@@ -8,7 +8,7 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "paths": { "@/*": ["../src/*"] }
+    "paths": { "@/*": ["../*"] }
   },
-  "include": ["src/**/*.ts", "../src/lib/types.ts"]
+  "include": ["src/**/*.ts", "../lib/types.ts"]
 }

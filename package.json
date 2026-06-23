@@ -6,8 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "party:dev": "npx partykit dev party/src/buzzer.ts --port 1999",
-    "party:deploy": "npx partykit deploy party/src/buzzer.ts"
+    "party:dev": "npx partykit dev realtime-server/src/buzzer.ts --port 1999 --compatibility-date 2026-06-19",
+    "party:deploy": "npx partykit deploy realtime-server/src/buzzer.ts --compatibility-date 2026-06-19"
   },
   "dependencies": {
     "framer-motion": "^11.0.0",
