@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quiz Buzzer Controller</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 320px;
+      min-height: 400px;
+      background: #09090b;
+      color: #f4f4f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      padding: 16px;
+    }
+
+    h1 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #a1a1aa;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+
+    .field {
+      margin-bottom: 10px;
+    }
+
+    label {
+      display: block;
+      font-size: 11px;
+      color: #71717a;
+      margin-bottom: 4px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    input {
+      width: 100%;
+      background: #18181b;
+      border: 1px solid #3f3f46;
+      border-radius: 6px;
+      color: #f4f4f5;
+      font-size: 13px;
+      padding: 7px 10px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus {
+      border-color: #6366f1;
+    }
+
+    input::placeholder {
+      color: #52525b;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .row .field {
+      flex: 1;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 8px 12px;
+      transition: opacity 0.15s;
+    }
+
+    .btn:hover { opacity: 0.85; }
+    .btn:active { opacity: 0.7; }
+
+    .btn-save {
+      width: 100%;
+      background: #6366f1;
+      color: #fff;
+      margin-top: 4px;
+      margin-bottom: 14px;
+    }
+
+    .btn-open {
+      flex: 1;
+      background: #16a34a;
+      color: #fff;
+    }
+
+    .btn-lock {
+      flex: 1;
+      background: #dc2626;
+      color: #fff;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #27272a;
+      margin: 12px 0;
+    }
+
+    .status-section h2 {
+      font-size: 11px;
+      font-weight: 500;
+      color: #71717a;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 8px;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .status-label {
+      font-size: 11px;
+      color: #71717a;
+      flex-shrink: 0;
+    }
+
+    .status-value {
+      font-size: 12px;
+      color: #a1a1aa;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .badge-open  { background: #14532d; color: #4ade80; }
+    .badge-locked { background: #7f1d1d; color: #f87171; }
+    .badge-error  { background: #451a03; color: #fb923c; }
+    .badge-unknown { background: #27272a; color: #a1a1aa; }
+
+    #save-feedback {
+      font-size: 11px;
+      color: #4ade80;
+      text-align: center;
+      min-height: 16px;
+      margin-top: -8px;
+      margin-bottom: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Quiz Buzzer</h1>
+
+  <div class="field">
+    <label for="partyKitHost">PartyKit host</label>
+    <input id="partyKitHost" type="text" placeholder="buzzer.username.partykit.dev" />
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label for="roomCode">Room code</label>
+      <input id="roomCode" type="text" maxlength="4" placeholder="ABCD" style="text-transform:uppercase" />
+    </div>
+    <div class="field">
+      <label for="hostPin">Host PIN</label>
+      <input id="hostPin" type="text" maxlength="6" placeholder="483920" />
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label for="triggerWord">Trigger word</label>
+      <input id="triggerWord" type="text" placeholder="BUZZ:" />
+    </div>
+    <div class="field">
+      <label for="delaySeconds">Delay (s)</label>
+      <input id="delaySeconds" type="number" min="0" max="60" step="1" placeholder="3" />
+    </div>
+  </div>
+
+  <button class="btn btn-save" id="saveBtn">Save</button>
+  <div id="save-feedback"></div>
+
+  <div class="controls">
+    <button class="btn btn-open" id="openBtn">Open Buzzers</button>
+    <button class="btn btn-lock" id="lockBtn">Lock Buzzers</button>
+  </div>
+
+  <hr class="divider" />
+
+  <div class="status-section">
+    <h2>Status</h2>
+    <div class="status-row">
+      <span class="status-label">Buzzers:</span>
+      <span id="buzzerStatusBadge" class="badge badge-unknown">unknown</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Last slide:</span>
+      <span id="lastSlideTitleEl" class="status-value">—</span>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

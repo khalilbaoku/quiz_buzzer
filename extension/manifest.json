@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Quiz Buzzer Controller",
+  "version": "1.0",
+  "description": "Control quiz buzzer open/lock from Canva, Google Slides, or PowerPoint Online.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://www.canva.com/*",
+    "https://docs.google.com/presentation/*",
+    "https://www.office.com/*",
+    "https://*.partykit.dev/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Quiz Buzzer Controller"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.canva.com/*"],
+      "js": ["content/canva.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://docs.google.com/presentation/*"],
+      "js": ["content/slides.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.office.com/*"],
+      "js": ["content/powerpoint.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

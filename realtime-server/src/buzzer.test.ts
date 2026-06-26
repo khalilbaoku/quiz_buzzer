@@ -593,6 +593,108 @@ describe("BuzzerServer", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // HTTP endpoint (onRequest)
+  // ---------------------------------------------------------------------------
+  describe("HTTP endpoint (onRequest)", () => {
+    function mockRequest(method: string, body: unknown): Party.Request {
+      return {
+        method,
+        json: async () => body,
+      } as unknown as Party.Request;
+    }
+
+    it("returns 405 for non-POST requests", async () => {
+      const res = await server.onRequest(mockRequest("GET", {}));
+      expect(res.status).toBe(405);
+    });
+
+    it("returns 401 when no PIN has been set yet", async () => {
+      const req = mockRequest("POST", { type: "host:open-buzzer", pin: "123456" });
+      const res = await server.onRequest(req);
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 401 when PIN is wrong", async () => {
+      setupGame(); // sets hostPin
+      const req = mockRequest("POST", { type: "host:open-buzzer", pin: "000000" });
+      const res = await server.onRequest(req);
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 400 for an unknown command type", async () => {
+      const host = setupGame();
+      const pin = server.hostPin!;
+      const req = mockRequest("POST", { type: "host:unknown-command", pin });
+      const res = await server.onRequest(req);
+      expect(res.status).toBe(400);
+    });
+
+    it("opens buzzers via HTTP with the correct PIN", async () => {
+      setupGame();
+      const pin = server.hostPin!;
+      const req = mockRequest("POST", { type: "host:open-buzzer", pin });
+      const res = await server.onRequest(req);
+      expect(res.status).toBe(200);
+      const json = await res.json() as { ok: boolean; phase: string };
+      expect(json.ok).toBe(true);
+      expect(json.phase).toBe("open");
+      expect(server.phase).toBe("open");
+    });
+
+    it("locks buzzers via HTTP with the correct PIN", async () => {
+      const host = setupGame();
+      send(server, host, { type: "host:open-buzzer" });
+      expect(server.phase).toBe("open");
+
+      const pin = server.hostPin!;
+      const req = mockRequest("POST", { type: "host:lock-buzzer", pin });
+      const res = await server.onRequest(req);
+      expect(res.status).toBe(200);
+      const json = await res.json() as { ok: boolean; phase: string };
+      expect(json.ok).toBe(true);
+      expect(json.phase).toBe("ready");
+      expect(server.phase).toBe("ready");
+    });
+
+    it("broadcasts buzz:opened to all players when HTTP opens buzzers", async () => {
+      setupGame();
+      const pin = server.hostPin!;
+      const broadcastFn = room.broadcast as ReturnType<typeof vi.fn>;
+      const callsBefore = broadcastFn.mock.calls.length;
+
+      await server.onRequest(mockRequest("POST", { type: "host:open-buzzer", pin }));
+
+      const newCalls = broadcastFn.mock.calls.slice(callsBefore);
+      const buzzOpenedCall = newCalls.find((call) => {
+        const msg = JSON.parse(call[0] as string) as { type: string };
+        return msg.type === "buzz:opened";
+      });
+      expect(buzzOpenedCall).toBeDefined();
+    });
+
+    it("resets buzzQueue when HTTP opens buzzers", async () => {
+      const host = setupGame();
+      const p = joinPlayer("A1", "Alice", "p1");
+      send(server, host, { type: "host:open-buzzer" });
+      send(server, p, { type: "team:buzz" });
+      expect(server.buzzQueue.length).toBe(1);
+
+      const pin = server.hostPin!;
+      await server.onRequest(mockRequest("POST", { type: "host:open-buzzer", pin }));
+      expect(server.buzzQueue.length).toBe(0);
+    });
+
+    it("returns 400 for a malformed JSON body", async () => {
+      const req = {
+        method: "POST",
+        json: async () => { throw new SyntaxError("bad json"); },
+      } as unknown as Party.Request;
+      const res = await server.onRequest(req);
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Host controls
   // ---------------------------------------------------------------------------
   describe("Host controls", () => {

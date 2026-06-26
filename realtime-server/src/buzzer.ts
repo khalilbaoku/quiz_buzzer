@@ -603,9 +603,7 @@ export default class BuzzerServer implements Party.Server {
     this.broadcastState();
   }
 
-  handleOpenBuzzer(sender: Party.Connection) {
-    if (!this.isHost(sender)) return;
-
+  private doOpenBuzzer() {
     this.phase = "open";
     this.buzzQueue = [];
     this.currentBuzzer = null;
@@ -623,9 +621,7 @@ export default class BuzzerServer implements Party.Server {
     this.broadcastState();
   }
 
-  handleLockBuzzer(sender: Party.Connection) {
-    if (!this.isHost(sender)) return;
-
+  private doLockBuzzer() {
     this.phase = "ready";
     this.acceptingBuzzesUntil = null;
     if (this.timerTimeout) {
@@ -635,6 +631,49 @@ export default class BuzzerServer implements Party.Server {
 
     this.broadcast({ type: "buzz:locked" });
     this.broadcastState();
+  }
+
+  handleOpenBuzzer(sender: Party.Connection) {
+    if (!this.isHost(sender)) return;
+    this.doOpenBuzzer();
+  }
+
+  handleLockBuzzer(sender: Party.Connection) {
+    if (!this.isHost(sender)) return;
+    this.doLockBuzzer();
+  }
+
+  async onRequest(req: Party.Request): Promise<Response> {
+    if (req.method !== "POST") {
+      return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = await req.json();
+    } catch {
+      return new Response("Bad Request", { status: 400 });
+    }
+
+    if (!this.hostPin || body.pin !== this.hostPin) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    switch (body.type) {
+      case "host:open-buzzer":
+        this.doOpenBuzzer();
+        break;
+      case "host:lock-buzzer":
+        this.doLockBuzzer();
+        break;
+      default:
+        return new Response("Unknown command", { status: 400 });
+    }
+
+    return new Response(JSON.stringify({ ok: true, phase: this.phase }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   handleCorrect(sender: Party.Connection, points?: number) {
