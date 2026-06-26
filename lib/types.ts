@@ -109,6 +109,7 @@ export type ServerMessage =
   | { type: "correct"; teamId: string; points: number }
   | { type: "incorrect"; teamId: string }
   | { type: "joined"; teamId: string; teamName: string; teamColor: string; playerId: string }
+  | { type: "host:authenticated"; pin: string }
   | { type: "error"; message: string };
 
 // ---- Team Colors ----

@@ -61,6 +61,18 @@ interface RoomState {
   hostConnected: boolean;
 }
 
+// Shape persisted to Cloudflare Durable Object storage so state survives
+// when the room has no active connections (hibernation).
+interface SavedState {
+  config: RoomConfig;
+  teams: Team[];
+  players: Player[];
+  phase: RoomPhase;
+  questionNumber: number;
+  questionHistory: QuestionResult[];
+  hostPin: string | null;
+}
+
 const TEAM_COLORS = [
   "#ef4444", "#3b82f6", "#22c55e", "#eab308", "#a855f7",
   "#f97316", "#06b6d4", "#ec4899", "#84cc16", "#f43f5e",
@@ -79,6 +91,11 @@ const DEFAULT_CONFIG: RoomConfig = {
 };
 
 const BUZZ_COLLECTION_WINDOW_MS = 1000;
+const MAX_NAME_LENGTH = 30;
+
+// Rate limiting: each connection may send at most this many messages per window.
+const RATE_LIMIT_MAX = 20;
+const RATE_LIMIT_WINDOW_MS = 5000;
 
 export default class BuzzerServer implements Party.Server {
   config: RoomConfig = { ...DEFAULT_CONFIG };
@@ -92,15 +109,77 @@ export default class BuzzerServer implements Party.Server {
   questionNumber: number = 1;
   questionHistory: QuestionResult[] = [];
   hostConnectionId: string | null = null;
-  connectionToPlayer: Map<string, string> = new Map(); // connectionId -> playerId
+  hostPin: string | null = null;
+  connectionToPlayer: Map<string, string> = new Map();
   timerTimeout: ReturnType<typeof setTimeout> | null = null;
   firstBuzzTime: number | null = null;
   acceptingBuzzesUntil: number | null = null;
 
+  // Sliding-window rate limiter: connectionId -> sorted list of message timestamps
+  messageTimes: Map<string, number[]> = new Map();
+
   constructor(readonly room: Party.Room) {}
 
+  generatePin(): string {
+    return Math.floor(100_000 + Math.random() * 900_000).toString();
+  }
+
+  // Called by PartyKit before any connections arrive, including after the room
+  // wakes from hibernation. Restores persisted state so a host page-refresh or
+  // brief period with no connections does not wipe teams, scores, and history.
+  async onStart() {
+    const saved = await this.room.storage.get<SavedState>("gameState");
+    if (!saved) return;
+
+    this.config = saved.config;
+    this.questionNumber = saved.questionNumber;
+    this.questionHistory = saved.questionHistory;
+    this.hostPin = saved.hostPin ?? null;
+
+    for (const team of saved.teams) {
+      this.teams.set(team.id, team);
+    }
+    for (const player of saved.players) {
+      // All players start as disconnected; they reconnect via WebSocket
+      this.players.set(player.id, { ...player, connected: false });
+    }
+
+    // If the room was mid-question (open/buzzed/expired), reset to "ready".
+    // The timer is not persisted and cannot be reliably restored, so the host
+    // opens buzzers again when they reconnect.
+    const unstablePhases: RoomPhase[] = ["open", "buzzed", "expired", "answering"];
+    this.phase = unstablePhases.includes(saved.phase) ? "ready" : saved.phase;
+  }
+
+  // Persists essential game state to Cloudflare Durable Object storage.
+  // Fire-and-forget (not awaited) — called after every state change.
+  saveState() {
+    void this.room.storage.put("gameState", {
+      config: this.config,
+      teams: Array.from(this.teams.values()),
+      players: Array.from(this.players.values()),
+      phase: this.phase,
+      questionNumber: this.questionNumber,
+      questionHistory: this.questionHistory,
+      hostPin: this.hostPin,
+    } satisfies SavedState);
+  }
+
+  // Returns true if this connection has exceeded the rate limit.
+  // Uses a sliding window: messages older than RATE_LIMIT_WINDOW_MS are forgotten.
+  isRateLimited(connectionId: string): boolean {
+    const now = Date.now();
+    const times = this.messageTimes.get(connectionId) ?? [];
+    const recent = times.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+    recent.push(now);
+    this.messageTimes.set(connectionId, recent);
+    return recent.length > RATE_LIMIT_MAX;
+  }
+
+  // A connection is the host only if it has already authenticated with the correct PIN.
+  // We track this by checking whether the server set hostConnectionId to this connection's id.
   isHost(sender: Party.Connection) {
-    return sender.id === this.hostConnectionId || !this.connectionToPlayer.has(sender.id);
+    return sender.id === this.hostConnectionId;
   }
 
   getState(): RoomState {
@@ -129,6 +208,7 @@ export default class BuzzerServer implements Party.Server {
   }
 
   broadcastState() {
+    this.saveState();
     this.broadcast({ type: "state", state: this.getState() });
   }
 
@@ -176,6 +256,9 @@ export default class BuzzerServer implements Party.Server {
   }
 
   onClose(connection: Party.Connection) {
+    // Clean up rate limit tracking for this connection
+    this.messageTimes.delete(connection.id);
+
     if (connection.id === this.hostConnectionId) {
       this.hostConnectionId = null;
       this.broadcastState();
@@ -193,6 +276,8 @@ export default class BuzzerServer implements Party.Server {
   }
 
   onMessage(message: string, sender: Party.Connection) {
+    if (this.isRateLimited(sender.id)) return;
+
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(message);
@@ -202,7 +287,7 @@ export default class BuzzerServer implements Party.Server {
 
     switch (msg.type) {
       case "host:join":
-        this.handleHostJoin(sender);
+        this.handleHostJoin(sender, msg.pin as string | undefined);
         break;
       case "host:setup-teams":
         this.handleSetupTeams(sender, msg.teamNames as string[]);
@@ -251,14 +336,29 @@ export default class BuzzerServer implements Party.Server {
     }
   }
 
-  handleHostJoin(sender: Party.Connection) {
-    this.hostConnectionId = sender.id;
-    this.broadcastState();
+  handleHostJoin(sender: Party.Connection, pin?: string) {
+    if (this.hostPin === null) {
+      // First host to connect — generate a PIN and authenticate them immediately
+      this.hostPin = this.generatePin();
+      this.hostConnectionId = sender.id;
+      this.send(sender, { type: "host:authenticated", pin: this.hostPin });
+      this.broadcastState();
+    } else if (pin === this.hostPin) {
+      // Returning host presenting the correct PIN (e.g. after a page refresh)
+      this.hostConnectionId = sender.id;
+      this.send(sender, { type: "host:authenticated", pin: this.hostPin });
+      this.broadcastState();
+    } else {
+      // Wrong or missing PIN — reject
+      this.send(sender, {
+        type: "error",
+        message: "This room already has a host. Use the original host link (URL ending in #PIN) to rejoin.",
+      });
+    }
   }
 
   handleSetupTeams(sender: Party.Connection, teamNames: string[]) {
     if (!this.isHost(sender)) return;
-    this.hostConnectionId = sender.id;
 
     this.teams.clear();
     this.players.clear();
@@ -267,7 +367,8 @@ export default class BuzzerServer implements Party.Server {
     this.questionNumber = 1;
 
     for (let i = 0; i < teamNames.length; i++) {
-      const name = teamNames[i]?.trim();
+      // Truncate team names to MAX_NAME_LENGTH to protect UI layout
+      const name = teamNames[i]?.trim().slice(0, MAX_NAME_LENGTH);
       if (!name) continue;
 
       const teamId = `team_${i}`;
@@ -298,6 +399,14 @@ export default class BuzzerServer implements Party.Server {
 
     const code = teamCode.trim().toUpperCase();
     const name = playerName.trim();
+
+    if (name.length > MAX_NAME_LENGTH) {
+      this.send(sender, {
+        type: "error",
+        message: `Name must be ${MAX_NAME_LENGTH} characters or fewer`,
+      });
+      return;
+    }
 
     // Find team by code
     let targetTeam: Team | null = null;
@@ -376,7 +485,7 @@ export default class BuzzerServer implements Party.Server {
     }
 
     for (let i = 0; i < teamNames.length; i++) {
-      const name = teamNames[i]?.trim();
+      const name = teamNames[i]?.trim().slice(0, MAX_NAME_LENGTH);
       if (!name) continue;
 
       // Skip duplicates
@@ -496,7 +605,6 @@ export default class BuzzerServer implements Party.Server {
 
   handleOpenBuzzer(sender: Party.Connection) {
     if (!this.isHost(sender)) return;
-    this.hostConnectionId = sender.id;
 
     this.phase = "open";
     this.buzzQueue = [];
@@ -517,7 +625,6 @@ export default class BuzzerServer implements Party.Server {
 
   handleLockBuzzer(sender: Party.Connection) {
     if (!this.isHost(sender)) return;
-    this.hostConnectionId = sender.id;
 
     this.phase = "ready";
     this.acceptingBuzzesUntil = null;
@@ -532,7 +639,6 @@ export default class BuzzerServer implements Party.Server {
 
   handleCorrect(sender: Party.Connection, points?: number) {
     if (!this.isHost(sender)) return;
-    this.hostConnectionId = sender.id;
     if (!this.currentBuzzer) return;
 
     const awardedPoints = Number.isFinite(points)
@@ -557,7 +663,6 @@ export default class BuzzerServer implements Party.Server {
 
   handleIncorrect(sender: Party.Connection) {
     if (!this.isHost(sender)) return;
-    this.hostConnectionId = sender.id;
 
     if (this.timerTimeout) {
       clearTimeout(this.timerTimeout);
@@ -615,7 +720,6 @@ export default class BuzzerServer implements Party.Server {
 
   handleReset(sender: Party.Connection) {
     if (!this.isHost(sender)) return;
-    this.hostConnectionId = sender.id;
 
     this.phase = "ready";
     this.buzzQueue = [];
@@ -635,7 +739,6 @@ export default class BuzzerServer implements Party.Server {
 
   handleNewQuestion(sender: Party.Connection) {
     if (!this.isHost(sender)) return;
-    this.hostConnectionId = sender.id;
 
     this.questionNumber++;
     this.buzzQueue = [];
@@ -656,7 +759,6 @@ export default class BuzzerServer implements Party.Server {
 
   handleUpdateConfig(sender: Party.Connection, updates: Partial<RoomConfig>) {
     if (!this.isHost(sender)) return;
-    this.hostConnectionId = sender.id;
     this.config = {
       ...this.config,
       ...updates,
@@ -671,7 +773,6 @@ export default class BuzzerServer implements Party.Server {
 
   handleAwardPoints(sender: Party.Connection, teamId: string, points: number) {
     if (!this.isHost(sender)) return;
-    this.hostConnectionId = sender.id;
     const team = this.teams.get(teamId);
     if (team) {
       team.score += points;
@@ -686,7 +787,6 @@ export default class BuzzerServer implements Party.Server {
     points?: number
   ) {
     if (!this.isHost(sender)) return;
-    this.hostConnectionId = sender.id;
     if (!Number.isInteger(questionNumber) || questionNumber < 1) return;
     if (teamId !== null && !this.teams.has(teamId)) return;
 

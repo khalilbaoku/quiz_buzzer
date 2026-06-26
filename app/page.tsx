@@ -106,7 +106,7 @@ export default function Home() {
             value={playerName}
             onChange={(e) => setPlayerName(e.target.value)}
             placeholder="Your Name"
-            maxLength={20}
+            maxLength={30}
             className="w-full py-3 px-4 bg-zinc-900 border border-zinc-700 rounded-xl
               text-center text-lg placeholder:text-zinc-600
               focus:outline-none focus:border-zinc-500"

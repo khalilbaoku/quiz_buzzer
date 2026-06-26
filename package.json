@@ -7,11 +7,12 @@
     "build": "next build",
     "start": "next start",
     "party:dev": "npx partykit dev realtime-server/src/buzzer.ts --port 1999 --compatibility-date 2026-06-19",
-    "party:deploy": "npx partykit deploy realtime-server/src/buzzer.ts --compatibility-date 2026-06-19"
+    "party:deploy": "npx partykit deploy realtime-server/src/buzzer.ts --compatibility-date 2026-06-19",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "framer-motion": "^11.0.0",
-    "howler": "^2.2.4",
     "next": "^14.2.0",
     "partysocket": "^1.0.0",
     "qrcode": "^1.5.3",
@@ -19,7 +20,6 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "@types/howler": "^2.2.11",
     "@types/node": "^20.11.0",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.2.0",
@@ -28,6 +28,7 @@
     "partykit": "^0.0.108",
     "postcss": "^8.4.33",
     "tailwindcss": "^3.4.1",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^1.6.0"
   }
 }

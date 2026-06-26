@@ -27,6 +27,12 @@ export default function HostPage() {
   const [showQR, setShowQR] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [hostLinkCopied, setHostLinkCopied] = useState(false);
+  const [hostAuthError, setHostAuthError] = useState<string | null>(null);
+
+  // Holds the PIN in a ref so the `send` callback always uses the latest value
+  // without needing to be re-created whenever the PIN changes.
+  const hostPinRef = useRef<string | null>(null);
 
   const joinUrl = typeof window !== "undefined"
     ? `${window.location.origin}`
@@ -35,12 +41,23 @@ export default function HostPage() {
   useEffect(() => {
     unlockAudio();
 
+    // Read PIN from URL hash first (#483920), fall back to sessionStorage.
+    // The hash is preserved on page refresh and is not sent in HTTP requests.
+    const hashPin = typeof window !== "undefined"
+      ? window.location.hash.slice(1) || null
+      : null;
+    const storedPin = typeof window !== "undefined"
+      ? sessionStorage.getItem(`quiz-host-pin-${roomCode}`)
+      : null;
+    hostPinRef.current = hashPin || storedPin;
+
     const ws = connectToRoom(roomCode);
     wsRef.current = ws;
 
     ws.addEventListener("open", () => {
       setConnected(true);
-      ws.send(JSON.stringify({ type: "host:join" }));
+      const pin = hostPinRef.current;
+      ws.send(JSON.stringify({ type: "host:join", ...(pin ? { pin } : {}) }));
     });
 
     ws.addEventListener("close", () => setConnected(false));
@@ -49,6 +66,18 @@ export default function HostPage() {
       const msg: ServerMessage = JSON.parse(evt.data);
 
       switch (msg.type) {
+        case "host:authenticated": {
+          const pin = msg.pin;
+          hostPinRef.current = pin;
+          if (typeof window !== "undefined") {
+            sessionStorage.setItem(`quiz-host-pin-${roomCode}`, pin);
+            // Embed the PIN in the URL hash so the page is self-contained:
+            // refreshing preserves the hash, and sharing this URL lets a host
+            // rejoin from a different device.
+            window.history.replaceState(null, "", `${window.location.pathname}#${pin}`);
+          }
+          break;
+        }
         case "state":
           setState({
             ...msg.state,
@@ -74,6 +103,9 @@ export default function HostPage() {
         case "incorrect":
         case "timer:expired":
           playIncorrect();
+          break;
+        case "error":
+          setHostAuthError(msg.message);
           break;
       }
     });
@@ -101,7 +133,8 @@ export default function HostPage() {
         setConnected(false);
         return;
       }
-      ws.send(JSON.stringify(msg));
+      const pin = hostPinRef.current;
+      ws.send(JSON.stringify(pin ? { ...msg, pin } : msg));
     },
     []
   );
@@ -125,6 +158,39 @@ export default function HostPage() {
     navigator.clipboard?.writeText(lines.join("\n"));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  // PIN auth error — someone tried to join as host without the correct PIN
+  if (hostAuthError) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="text-center max-w-sm space-y-4">
+          <div className="text-4xl font-black text-red-500">LOCKED</div>
+          <div className="text-zinc-300 font-bold">Cannot join as host</div>
+          <div className="text-zinc-500 text-sm leading-relaxed">{hostAuthError}</div>
+          <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-4 text-left space-y-2">
+            <div className="text-zinc-400 text-xs font-bold uppercase tracking-wider">
+              How to fix this
+            </div>
+            <div className="text-zinc-500 text-xs leading-relaxed">
+              If you are the original host, use the URL you bookmarked or noted down — it should
+              end with a <span className="text-zinc-300 font-mono">#123456</span> PIN code.
+              If you have it, paste the full URL into your browser address bar.
+            </div>
+            <div className="text-zinc-500 text-xs leading-relaxed">
+              If the original host is still in the session, ask them to copy their host link
+              using the button on their host screen.
+            </div>
+          </div>
+          <button
+            onClick={() => router.push("/")}
+            className="text-zinc-500 text-sm hover:text-zinc-300 transition-colors"
+          >
+            Go home
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // Setup mode
@@ -177,6 +243,7 @@ export default function HostPage() {
                 setTeamNames(next);
               }}
               placeholder={`Team ${i + 1}`}
+              maxLength={30}
               className="w-full py-2 px-3 bg-zinc-900 border border-zinc-700 rounded-lg
                 text-sm focus:outline-none focus:border-zinc-500"
             />
@@ -250,6 +317,20 @@ export default function HostPage() {
                 text-zinc-400 hover:text-white transition-colors"
             >
               {copied ? "Copied!" : "Copy Info"}
+            </button>
+            <button
+              onClick={() => {
+                if (typeof window !== "undefined") {
+                  navigator.clipboard?.writeText(window.location.href);
+                  setHostLinkCopied(true);
+                  setTimeout(() => setHostLinkCopied(false), 2000);
+                }
+              }}
+              title="Copy this URL — it contains your host PIN and lets you rejoin as host from any device"
+              className="text-xs bg-zinc-800 hover:bg-zinc-700 px-3 py-1.5 rounded-lg
+                text-zinc-400 hover:text-white transition-colors"
+            >
+              {hostLinkCopied ? "Copied!" : "Copy Host Link"}
             </button>
             <button
               onClick={() => setShowQR(!showQR)}
