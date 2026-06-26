@@ -1,9 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { generateRoomCode } from "@/lib/room-code";
 import { unlockAudio } from "@/lib/sounds";
+
+interface SavedJoin {
+  roomCode: string;
+  teamCode: string;
+  playerName: string;
+}
+
+const STORAGE_KEY = "quiz-last-join";
+
+function saveJoin(data: SavedJoin) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {}
+}
+
+function loadJoin(): SavedJoin | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as SavedJoin) : null;
+  } catch {
+    return null;
+  }
+}
 
 export default function Home() {
   const router = useRouter();
@@ -11,6 +34,11 @@ export default function Home() {
   const [roomCode, setRoomCode] = useState("");
   const [teamCode, setTeamCode] = useState("");
   const [playerName, setPlayerName] = useState("");
+  const [savedJoin, setSavedJoin] = useState<SavedJoin | null>(null);
+
+  useEffect(() => {
+    setSavedJoin(loadJoin());
+  }, []);
 
   function handleHost() {
     unlockAudio();
@@ -18,18 +46,34 @@ export default function Home() {
     router.push(`/host/${code}`);
   }
 
+  function rejoin(saved: SavedJoin) {
+    unlockAudio();
+    saveJoin(saved);
+    const params = new URLSearchParams({ tc: saved.teamCode, name: saved.playerName });
+    router.push(`/play/${saved.roomCode}?${params.toString()}`);
+  }
+
   function handleJoin() {
     unlockAudio();
     if (mode === "home") {
+      // Pre-fill form with last session if available
+      if (savedJoin) {
+        setRoomCode(savedJoin.roomCode);
+        setTeamCode(savedJoin.teamCode);
+        setPlayerName(savedJoin.playerName);
+      }
       setMode("join");
       return;
     }
     if (!roomCode.trim() || !teamCode.trim() || !playerName.trim()) return;
-    const params = new URLSearchParams({
-      tc: teamCode.trim().toUpperCase(),
-      name: playerName.trim(),
-    });
-    router.push(`/play/${roomCode.toUpperCase()}?${params.toString()}`);
+    const join: SavedJoin = {
+      roomCode: roomCode.trim().toUpperCase(),
+      teamCode: teamCode.trim().toUpperCase(),
+      playerName: playerName.trim(),
+    };
+    saveJoin(join);
+    const params = new URLSearchParams({ tc: join.teamCode, name: join.playerName });
+    router.push(`/play/${join.roomCode}?${params.toString()}`);
   }
 
   return (
@@ -60,6 +104,23 @@ export default function Home() {
           >
             JOIN A QUIZ
           </button>
+
+          {/* Quick rejoin — only shown when the player has a previous session saved */}
+          {savedJoin && (
+            <button
+              onClick={() => rejoin(savedJoin)}
+              className="w-full py-3 px-4 rounded-xl border border-zinc-700 bg-zinc-900
+                hover:bg-zinc-800 active:scale-95 transition-all duration-150 text-left"
+            >
+              <div className="text-xs text-zinc-500 uppercase tracking-wider mb-0.5">
+                Rejoin last session
+              </div>
+              <div className="text-white font-bold text-sm">{savedJoin.playerName}</div>
+              <div className="text-zinc-500 text-xs">
+                Room {savedJoin.roomCode} &middot; Team {savedJoin.teamCode}
+              </div>
+            </button>
+          )}
 
           <button
             onClick={() => {
